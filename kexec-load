@@ -1,0 +1,38 @@
+#!/bin/sh
+
+[ -x /sbin/kexec ] || exit 1
+[ -x /sbin/grubby ] || exit 1
+
+GRUBBY_FILE="/var/log/grubby"
+TMP=$(mktemp) || exit 1
+
+cleanup() {
+    /bin/rm -f "$GRUBBY_FILE" "$TMP"
+}
+trap cleanup EXIT
+
+#  Command "grubby --default-kernel" has a bug/feature that fsyncs
+#  after writting each line to a debug log file, making it slow (several seconds).
+#  Workaround is to write to /dev/null instead.
+rm -f "$GRUBBY_FILE"
+ln -s /dev/null $GRUBBY_FILE
+KERNEL_IMG=$(grubby --default-kernel) || exit 1
+case "$KERNEL_IMG" in
+    /boot/vmlinuz-*) ;;
+    *) exit 1 ;; 
+esac
+[ -f "$KERNEL_IMG" ] || exit 1
+
+#  Get the detailed information of the default kernel (as seen by grub)
+#  This will create a temporary file in /tmp
+grubby --info="$KERNEL_IMG" | egrep "^(args|initrd|kernel|root)=" > "$TMP"
+[ $(wc -l < "$TMP") -eq 4 -a $(cut -d= -f1 "$TMP"|sort -u|wc -l) -eq 4 ] || exit 1
+source "$TMP"
+
+#  Simple log to see if this script gets executed
+(
+echo $(date --rfc-3339=seconds)
+set -x
+#  Load (prepare) the kernel for execution
+kexec --load "$kernel" --initrd="$initrd" --command-line="root=$root $args"
+) >> /var/log/kexec 2>&1
